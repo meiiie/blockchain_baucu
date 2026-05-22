@@ -33,6 +33,7 @@ import {
   getInvalidRosterRows,
   getInvalidWalletEntries,
   getScheduleState,
+  isValidEthereumAddress,
   normalizePositions,
   parseRosterEntries,
   shortenAddress,
@@ -94,6 +95,22 @@ function buildSharedRosterInviteUrl(draft: ElectionV1RosterDraft) {
 const DEFAULT_CREATE_MESSAGE = 'Sẵn sàng tạo một ballot gồm nhiều chức vụ trên Sepolia.';
 const compactControlClass =
   'w-full rounded-[10px] border border-[rgba(0,0,0,0.08)] bg-[var(--clay-surface)] px-3 py-2 text-sm text-[var(--clay-text)] placeholder:text-[var(--clay-muted-soft)] focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-[var(--clay-primary-focus)] disabled:opacity-55';
+const compactInlineControlClass =
+  'min-w-[120px] flex-1 rounded-[10px] border border-[rgba(0,0,0,0.08)] bg-[var(--clay-surface)] px-2.5 py-1.5 text-[13px] text-[var(--clay-text)] placeholder:text-[var(--clay-muted-soft)] focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-[var(--clay-primary-focus)] disabled:opacity-55';
+
+function getPositionProgress(position: PositionDraft) {
+  const namedCandidateCount = position.candidates.filter(
+    (candidate) => candidate.displayName.trim().length > 0,
+  ).length;
+  const invalidWalletCount = position.candidates.filter((candidate) => {
+    const wallet = candidate.walletAddress.trim();
+    return wallet.length > 0 && !isValidEthereumAddress(wallet);
+  }).length;
+  const hasTitle = position.title.trim().length > 0;
+  const ready = hasTitle && namedCandidateCount >= 2 && invalidWalletCount === 0;
+
+  return { hasTitle, invalidWalletCount, namedCandidateCount, ready };
+}
 
 function getRequirementAction(requirement: Requirement | null) {
   if (!requirement) {
@@ -189,9 +206,8 @@ export default function TaoCuocBauCuPage() {
   const [voterMode, setVoterMode] = useState<RosterMode>('wallets');
   const [voterWalletsInput, setVoterWalletsInput] = useState('');
   const [rosterInput, setRosterInput] = useState('');
-  const [positions, setPositions] = useState<PositionDraft[]>([
-    createPositionDraft(1),
-  ]);
+  const [positions, setPositions] = useState<PositionDraft[]>(() => [createPositionDraft(1)]);
+  const [activePositionId, setActivePositionId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
   const [activeDraft, setActiveDraft] = useState<ElectionV1RosterDraft | null>(null);
@@ -270,6 +286,7 @@ export default function TaoCuocBauCuPage() {
     (total, position) => total + position.candidates.length,
     0,
   );
+  const readyPositionCount = positions.filter((position) => getPositionProgress(position).ready).length;
   const voterCount =
     voterMode === 'wallets' ? parsedVoterWallets.length : parsedRosterVoters.length;
   const outstandingRequirements = requirements.filter((requirement) => !requirement.ok);
@@ -290,6 +307,14 @@ export default function TaoCuocBauCuPage() {
       : 'Kết nối MetaMask';
   const nextActionIsWallet =
     firstInvalidRequirement?.id === 'wallet' || firstInvalidRequirement?.id === 'network';
+  const activePosition = positions.find((position) => position.id === activePositionId) ?? positions[0];
+  const activePositionIndex = Math.max(
+    0,
+    positions.findIndex((position) => position.id === activePosition?.id),
+  );
+  const activePositionProgress = activePosition
+    ? getPositionProgress(activePosition)
+    : { hasTitle: false, invalidWalletCount: 0, namedCandidateCount: 0, ready: false };
 
   useEffect(() => {
     if (!draftKeyFromUrl || !accessToken) {
@@ -344,6 +369,16 @@ export default function TaoCuocBauCuPage() {
     };
   }, [accessToken, activeDraft?.groupKey, draftKeyFromUrl]);
 
+  useEffect(() => {
+    if (positions.length === 0) {
+      return;
+    }
+
+    if (!activePositionId || !positions.some((position) => position.id === activePositionId)) {
+      setActivePositionId(positions[0].id);
+    }
+  }, [activePositionId, positions]);
+
   function focusRequirement(requirement: Requirement) {
     const targetId = requirement.targetId;
     if (!targetId) {
@@ -372,13 +407,26 @@ export default function TaoCuocBauCuPage() {
   }
 
   function addPosition() {
-    setPositions((current) => [...current, createPositionDraft(current.length + 1)]);
+    const nextPosition = createPositionDraft(positions.length + 1);
+    setPositions((current) => [...current, nextPosition]);
+    setActivePositionId(nextPosition.id);
   }
 
   function removePosition(id: string) {
-    setPositions((current) =>
-      current.length <= 1 ? current : current.filter((item) => item.id !== id),
-    );
+    if (positions.length <= 1) {
+      return;
+    }
+
+    const removedIndex = positions.findIndex((position) => position.id === id);
+    const nextPositions = positions.filter((position) => position.id !== id);
+    setPositions(nextPositions);
+
+    if (activePositionId === id) {
+      const nextActive =
+        nextPositions[Math.min(Math.max(removedIndex, 0), nextPositions.length - 1)] ??
+        nextPositions[0];
+      setActivePositionId(nextActive?.id ?? '');
+    }
   }
 
   function updateCandidate(
@@ -577,7 +625,11 @@ export default function TaoCuocBauCuPage() {
     b1: showInlineErrors && title.trim().length === 0,
     b2:
       showInlineErrors &&
-      (normalizedPositions.length === 0 || invalidCandidateWallets.length > 0),
+      requirements.some(
+        (requirement) =>
+          (requirement.id === 'positions' || requirement.id === 'candidate-wallets') &&
+          !requirement.ok,
+      ),
     b3:
       showInlineErrors &&
       (!scheduleState.isValid ||
@@ -625,7 +677,7 @@ export default function TaoCuocBauCuPage() {
         <SummaryRow label="Ví tạo" value={currentAccount ? shortenAddress(currentAccount) : 'Chưa nối'} />
         <SummaryRow
           label={voterMode === 'wallets' ? 'Cấu hình ví' : 'Cấu hình roster'}
-          value={`${filledPositionCount}/${positions.length} chức vụ · ${voterCount} cử tri`}
+          value={`${readyPositionCount}/${positions.length} chức vụ · ${voterCount} cử tri`}
         />
       </div>
 
@@ -685,11 +737,12 @@ export default function TaoCuocBauCuPage() {
   );
 
   const stepNavButtons = (prev?: 'b1' | 'b2' | 'b3', next?: 'b2' | 'b3' | 'b4') => (
-    <div className="mt-3 flex items-center justify-between gap-3">
+    <div className="mt-1 flex items-center justify-between gap-3">
       {prev ? (
         <Button
           type="button"
           variant="ghost"
+          size="sm"
           onClick={() => goto(prev)}
           iconLeft={<ArrowLeft className="h-4 w-4" aria-hidden="true" />}
         >
@@ -702,6 +755,7 @@ export default function TaoCuocBauCuPage() {
         <Button
           type="button"
           variant="primary"
+          size="sm"
           onClick={() => goto(next)}
           iconRight={<ArrowRight className="h-4 w-4" aria-hidden="true" />}
         >
@@ -714,11 +768,11 @@ export default function TaoCuocBauCuPage() {
   return (
     <div className="text-[var(--clay-text)]">
       <div className="mx-auto max-w-[1440px]">
-        <div className="mb-3">
-          <h1 className="text-[1.75rem] font-semibold tracking-[-0.015em] text-[var(--clay-text)]">
+        <div className="mb-1">
+          <h1 className="text-[1.65rem] font-semibold tracking-[-0.015em] text-[var(--clay-text)]">
             Tạo bầu cử
           </h1>
-          <p className="mt-1 text-[15px] text-[var(--clay-muted)]">
+          <p className="mt-0.5 text-sm text-[var(--clay-muted)]">
             Thiết lập thông tin, chức vụ, lịch và danh sách cử tri cho đợt bầu cử trên Sepolia.
           </p>
         </div>
@@ -782,10 +836,9 @@ export default function TaoCuocBauCuPage() {
 
             {/* ───────── Bước 2: Chức vụ & ứng viên ───────── */}
             <Wizard.Panel value="b2">
-              <div data-wizard-step="b2" id="positions-section">
+              <div data-wizard-step="b2" id="positions-section" tabIndex={-1}>
                 <SectionCard
                   title="Chức vụ & ứng viên"
-                  description="Mỗi chức vụ cần ≥ 2 ứng viên có tên."
                   actions={
                     <Button
                       type="button"
@@ -806,68 +859,164 @@ export default function TaoCuocBauCuPage() {
                     />
                   )}
 
-                  <div className="mt-3 space-y-4">
-                    {positions.map((position, positionIndex) => (
-                      <Panel key={position.id} padded={false} className="bg-[var(--clay-surface-soft)]">
-                        <div className="p-4">
-                          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold uppercase tracking-[-0.01em] text-[var(--clay-muted)]">
-                                Chức vụ {positionIndex + 1}
-                              </p>
-                              {position.title && (
-                                <p className="mt-0.5 truncate text-[15px] font-semibold text-[var(--clay-text)]">
-                                  {position.title}
-                                </p>
-                              )}
+                  <div className="mt-2 grid gap-3 2xl:grid-cols-[260px_minmax(0,1fr)]">
+                    <div className="2xl:hidden">
+                      <select
+                        id="position-selector"
+                        aria-label="Chọn chức vụ đang sửa"
+                        value={activePosition?.id ?? ''}
+                        onChange={(event) => setActivePositionId(event.target.value)}
+                        className={fieldControlClass}
+                      >
+                        {positions.map((position, positionIndex) => {
+                          const progress = getPositionProgress(position);
+                          return (
+                            <option key={position.id} value={position.id}>
+                              {position.title.trim() || `Chức vụ ${positionIndex + 1}`} ·{' '}
+                              {progress.namedCandidateCount}/2 ứng viên
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    <div className="hidden 2xl:block">
+                      <div className="rounded-[16px] border border-[var(--clay-border)] bg-[var(--clay-surface-soft)] p-2">
+                        <div className="flex items-center justify-between px-2 py-1">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase text-[var(--clay-muted)]">
+                              Bộ chức vụ
+                            </p>
+                            <p className="text-[12px] text-[var(--clay-muted-soft)]">
+                              Chọn vị trí để sửa
+                            </p>
+                          </div>
+                          <StatusBadge tone="info">{readyPositionCount}/{positions.length}</StatusBadge>
+                        </div>
+
+                        <div className="mt-2 space-y-2">
+                          {positions.map((position, positionIndex) => {
+                            const progress = getPositionProgress(position);
+                            const isActive = activePosition?.id === position.id;
+                            const statusLabel = progress.ready
+                              ? 'Sẵn sàng'
+                              : progress.hasTitle
+                                ? `${progress.namedCandidateCount}/2`
+                                : 'Cần tên';
+
+                            return (
+                              <button
+                                key={position.id}
+                                type="button"
+                                aria-pressed={isActive}
+                                onClick={() => setActivePositionId(position.id)}
+                                className={`w-full rounded-[14px] border p-3 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--clay-primary-focus)] ${
+                                  isActive
+                                    ? 'border-[var(--clay-primary)] bg-[var(--clay-primary-light)]'
+                                    : 'border-[var(--clay-border)] bg-[var(--clay-surface)] hover:border-[var(--clay-primary)]'
+                                }`}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="text-[11px] font-semibold uppercase text-[var(--clay-muted)]">
+                                      Vị trí ElectionV1 #{positionIndex + 1}
+                                    </p>
+                                    <p className="mt-0.5 truncate text-[14px] font-semibold text-[var(--clay-text)]">
+                                      {position.title.trim() || 'Đặt tên chức vụ'}
+                                    </p>
+                                  </div>
+                                  <StatusBadge tone={progress.ready ? 'success' : 'warning'}>
+                                    {statusLabel}
+                                  </StatusBadge>
+                                </div>
+                                <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--clay-border)]">
+                                  <div
+                                    className="h-full rounded-full bg-[var(--clay-primary)]"
+                                    style={{
+                                      width: `${Math.min(
+                                        100,
+                                        Math.round((progress.namedCandidateCount / 2) * 100),
+                                      )}%`,
+                                    }}
+                                  />
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+
+                    {activePosition && (
+                      <Panel padded={false} className="min-w-0 bg-[var(--clay-surface-soft)]">
+                        <div className="border-b border-[var(--clay-border)] px-3 py-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                              <StatusBadge tone={activePositionProgress.ready ? 'success' : 'warning'}>
+                                Vị trí #{activePositionIndex + 1}
+                              </StatusBadge>
+                              <span className="truncate text-sm font-semibold text-[var(--clay-text)]">
+                                {activePosition.title.trim() || 'Đặt tên chức vụ'}
+                              </span>
                             </div>
                             <Button
                               type="button"
                               variant="ghost"
-                              onClick={() => removePosition(position.id)}
+                              size="sm"
+                              disabled={positions.length <= 1}
+                              aria-label={`Xóa chức vụ ${activePositionIndex + 1}`}
+                              title={
+                                positions.length <= 1
+                                  ? 'Ballot cần ít nhất 1 chức vụ'
+                                  : 'Xóa chức vụ đang chọn'
+                              }
+                              onClick={() => removePosition(activePosition.id)}
                               iconLeft={<Trash2 className="h-4 w-4" aria-hidden="true" />}
-                            >
-                              Xóa chức vụ
-                            </Button>
+                              className="h-8 w-8 px-0"
+                            />
                           </div>
+                        </div>
 
+                        <div className="p-3">
                           <div className="grid gap-3 md:grid-cols-2">
                             <Field label="Tên chức vụ">
                               <input
-                                id={`${position.id}-title`}
-                                name={`${position.id}-title`}
+                                id={`${activePosition.id}-title`}
+                                name={`${activePosition.id}-title`}
                                 autoComplete="off"
-                                value={position.title}
+                                value={activePosition.title}
                                 onChange={(event) =>
-                                  updatePosition(position.id, { title: event.target.value })
+                                  updatePosition(activePosition.id, { title: event.target.value })
                                 }
                                 className={fieldControlClass}
-                                placeholder="Ví dụ: Lớp trưởng…"
+                                placeholder="Ví dụ: Lớp trưởng..."
                               />
                             </Field>
-                            <Field label="Mô tả chức vụ">
+                            <Field label="Quy tắc thắng">
                               <input
-                                id={`${position.id}-description`}
-                                name={`${position.id}-description`}
+                                id={`${activePosition.id}-description`}
+                                name={`${activePosition.id}-description`}
                                 autoComplete="off"
-                                value={position.description}
+                                value={activePosition.description}
                                 onChange={(event) =>
-                                  updatePosition(position.id, { description: event.target.value })
+                                  updatePosition(activePosition.id, { description: event.target.value })
                                 }
                                 className={fieldControlClass}
-                                placeholder="Ví dụ: Bầu 1 người cho vai trò này…"
+                                placeholder="Ví dụ: Bầu 1 người, lấy nhiều phiếu nhất..."
                               />
                             </Field>
                           </div>
 
-                          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <p className="text-sm font-semibold text-[var(--clay-text)]">
-                              Ứng viên cho {position.title || `chức vụ ${positionIndex + 1}`}
+                              Thẻ ứng viên · {activePositionProgress.namedCandidateCount}/
+                              {activePosition.candidates.length} có tên
                             </p>
                             <Button
                               type="button"
                               variant="secondary"
-                              onClick={() => addCandidate(position.id)}
+                              size="sm"
+                              onClick={() => addCandidate(activePosition.id)}
                               iconLeft={<Plus className="h-4 w-4" aria-hidden="true" />}
                             >
                               Thêm ứng viên
@@ -875,66 +1024,102 @@ export default function TaoCuocBauCuPage() {
                           </div>
 
                           {showInlineErrors &&
-                            position.title.trim().length > 0 &&
-                            position.candidates.filter(
-                              (candidate) => candidate.displayName.trim().length > 0,
-                            ).length < 2 && (
+                            activePosition.title.trim().length > 0 &&
+                            activePositionProgress.namedCandidateCount < 2 && (
                               <FieldError message="Mỗi chức vụ cần ít nhất 2 ứng viên có tên." />
                             )}
 
-                          <div className="mt-3 space-y-2">
-                            {position.candidates.map((candidate, candidateIndex) => (
-                              <div
-                                key={candidate.id}
-                                className="grid gap-2 rounded-[12px] border border-[var(--clay-border)] bg-[var(--clay-surface)] p-2 md:grid-cols-[2rem_minmax(0,1fr)_minmax(0,1fr)_auto] md:items-center"
-                              >
-                                <span className="hidden h-9 w-8 items-center justify-center rounded-[10px] bg-[var(--clay-surface-soft)] text-xs font-semibold text-[var(--clay-muted)] md:inline-flex">
-                                  {candidateIndex + 1}
-                                </span>
-                                <input
-                                  id={`${candidate.id}-name`}
-                                  name={`${candidate.id}-name`}
-                                  aria-label={`Tên ứng viên ${candidateIndex + 1}`}
-                                  autoComplete="off"
-                                  value={candidate.displayName}
-                                  onChange={(event) =>
-                                    updateCandidate(position.id, candidate.id, {
-                                      displayName: event.target.value,
-                                    })
-                                  }
-                                  className={compactControlClass}
-                                  placeholder={`Tên ứng viên ${candidateIndex + 1}`}
-                                />
-                                <input
-                                  id={`${candidate.id}-wallet`}
-                                  name={`${candidate.id}-wallet`}
-                                  aria-label={`Ví ứng viên ${candidateIndex + 1} tùy chọn`}
-                                  autoComplete="off"
-                                  spellCheck={false}
-                                  value={candidate.walletAddress}
-                                  onChange={(event) =>
-                                    updateCandidate(position.id, candidate.id, {
-                                      walletAddress: event.target.value,
-                                    })
-                                  }
-                                  className={`${compactControlClass} font-mono`}
-                                  placeholder="Ví ứng viên (tùy chọn)"
-                                />
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  size="sm"
-                                  aria-label={`Xóa ứng viên ${candidateIndex + 1}`}
-                                  onClick={() => removeCandidate(position.id, candidate.id)}
-                                  iconLeft={<Trash2 className="h-4 w-4" aria-hidden="true" />}
-                                  className="h-9 w-9 px-0"
-                                />
-                              </div>
-                            ))}
+                          <div className="mt-2 space-y-2">
+                            {activePosition.candidates.map((candidate, candidateIndex) => {
+                              const candidateWallet = candidate.walletAddress.trim();
+                              const candidateHasName = candidate.displayName.trim().length > 0;
+                              const candidateWalletInvalid =
+                                candidateWallet.length > 0 && !isValidEthereumAddress(candidateWallet);
+                              const candidateReady = candidateHasName && !candidateWalletInvalid;
+
+                              return (
+                                <article
+                                  key={candidate.id}
+                                  className={`rounded-[14px] border bg-[var(--clay-surface)] p-2 ${
+                                    candidateWalletInvalid
+                                      ? 'border-[var(--state-danger)]'
+                                      : candidateReady
+                                        ? 'border-[var(--state-success)]'
+                                        : 'border-[var(--clay-border)]'
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[12px] bg-[var(--clay-surface-soft)] font-mono text-[13px] font-semibold text-[var(--clay-text)]">
+                                      C{candidateIndex + 1}
+                                    </span>
+                                    <input
+                                      id={`${candidate.id}-name`}
+                                      name={`${candidate.id}-name`}
+                                      aria-label={`Tên ứng viên ${candidateIndex + 1}`}
+                                      autoComplete="off"
+                                      value={candidate.displayName}
+                                      onChange={(event) =>
+                                        updateCandidate(activePosition.id, candidate.id, {
+                                          displayName: event.target.value,
+                                        })
+                                      }
+                                      className={compactInlineControlClass}
+                                      placeholder={`Tên ứng viên ${candidateIndex + 1}`}
+                                    />
+                                    <input
+                                      id={`${candidate.id}-wallet`}
+                                      name={`${candidate.id}-wallet`}
+                                      aria-label={`Ví ứng viên ${candidateIndex + 1} tùy chọn`}
+                                      autoComplete="off"
+                                      spellCheck={false}
+                                      value={candidate.walletAddress}
+                                      onChange={(event) =>
+                                        updateCandidate(activePosition.id, candidate.id, {
+                                          walletAddress: event.target.value,
+                                        })
+                                      }
+                                      className={`${compactInlineControlClass} min-w-[150px] font-mono`}
+                                      placeholder="Ví đại diện (tùy chọn)"
+                                    />
+                                    <StatusBadge
+                                      tone={
+                                        candidateWalletInvalid
+                                          ? 'danger'
+                                          : candidateReady
+                                            ? 'success'
+                                            : 'warning'
+                                      }
+                                      className="shrink-0"
+                                    >
+                                      {candidateWalletInvalid
+                                        ? 'Sai ví'
+                                        : candidateReady
+                                          ? 'Sẵn sàng'
+                                          : 'Thiếu tên'}
+                                    </StatusBadge>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={activePosition.candidates.length <= 2}
+                                      aria-label={`Xóa ứng viên ${candidateIndex + 1}`}
+                                      title={
+                                        activePosition.candidates.length <= 2
+                                          ? 'Mỗi chức vụ cần tối thiểu 2 ứng viên'
+                                          : 'Xóa ứng viên'
+                                      }
+                                      onClick={() => removeCandidate(activePosition.id, candidate.id)}
+                                      iconLeft={<Trash2 className="h-4 w-4" aria-hidden="true" />}
+                                      className="h-8 w-8 px-0"
+                                    />
+                                  </div>
+                                </article>
+                              );
+                            })}
                           </div>
                         </div>
                       </Panel>
-                    ))}
+                    )}
                   </div>
                   {stepNavButtons('b1', 'b3')}
                 </SectionCard>
