@@ -76,10 +76,17 @@ const AppWithProviders = ({
 }: {
   children: React.ReactNode;
   useRecaptcha?: boolean;
-}) => (
-  <ThemeProvider>
-    <ToastProvider>
-      {useRecaptcha && isRecaptchaEnabled ? (
+}) => {
+  const content = (
+    <Web3Provider>
+      <Suspense fallback={<RouteFallback />}>{children}</Suspense>
+    </Web3Provider>
+  );
+
+  return (
+    <ThemeProvider>
+      <ToastProvider>
+        {useRecaptcha && isRecaptchaEnabled ? (
         <GoogleReCaptchaProvider
           reCaptchaKey={import.meta.env.VITE_RECAPTCHA_SITE_KEY ?? ''}
           scriptProps={{
@@ -95,17 +102,16 @@ const AppWithProviders = ({
           }}
         >
           <ReCaptchaProvider>
-            <Web3Provider>
-              <Suspense fallback={<RouteFallback />}>{children}</Suspense>
-            </Web3Provider>
+            {content}
           </ReCaptchaProvider>
         </GoogleReCaptchaProvider>
       ) : (
-        <Web3Provider>{children}</Web3Provider>
-      )}
-    </ToastProvider>
-  </ThemeProvider>
-);
+          content
+        )}
+      </ToastProvider>
+    </ThemeProvider>
+  );
+};
 
 const router = createBrowserRouter([
   {
@@ -137,6 +143,10 @@ const router = createBrowserRouter([
       {
         path: 'elections',
         element: <CacPhienBauCuPage />,
+      },
+      {
+        path: 'verify-voter',
+        element: <VoterVerificationPage />,
       },
       // === Forgot password flow (canonical EN, Đợt 14) ===
       {
@@ -183,20 +193,6 @@ const router = createBrowserRouter([
         ),
       },
     ],
-  },
-  // Thêm route mới cho trang xác thực cử tri
-  {
-    path: 'verify-voter',
-    element: (
-      <AppWithProviders>
-        <VoterVerificationPage />
-      </AppWithProviders>
-    ),
-    errorElement: (
-      <AppWithProviders>
-        <ErrorPage />
-      </AppWithProviders>
-    ),
   },
   {
     path: 'login',

@@ -26,6 +26,7 @@ import { useSepoliaWalletSummary } from '../hooks/useSepoliaWalletSummary';
 interface UserMenuProps {
   isCollapsed?: boolean;
   inMobileMenu?: boolean;
+  compact?: boolean;
 }
 
 type MenuPosition = {
@@ -47,7 +48,11 @@ function shortenAddress(value?: string | null) {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
-const UserMenu: React.FC<UserMenuProps> = ({ isCollapsed = false, inMobileMenu = false }) => {
+const UserMenu: React.FC<UserMenuProps> = ({
+  isCollapsed = false,
+  inMobileMenu = false,
+  compact = false,
+}) => {
   const { taiKhoan: user } = useSelector((state: RootState) => state.dangNhapTaiKhoan);
   const { balance, error, isLoading, publicConfig, refresh } = useSepoliaWalletSummary(
     user?.diaChiVi ?? null,
@@ -231,6 +236,15 @@ const UserMenu: React.FC<UserMenuProps> = ({ isCollapsed = false, inMobileMenu =
   const mobileMenuClasses = inMobileMenu
     ? 'w-full bg-transparent hover:bg-transparent focus:bg-transparent border-0'
     : '';
+  const buttonClasses = compact
+    ? 'flex h-10 min-h-0 w-full max-w-[230px] items-center space-x-2 rounded-full border border-[var(--clay-border)] bg-white px-2 py-1 transition-colors hover:bg-[var(--clay-surface-soft)]'
+    : `flex min-h-11 w-full items-center space-x-2 rounded-full border border-[var(--clay-border)] bg-white px-3 py-2 transition-colors hover:bg-[var(--clay-surface-soft)] ${mobileMenuClasses}`;
+  const avatarClasses = compact
+    ? 'flex h-8 w-8 items-center justify-center rounded-full bg-black'
+    : 'flex h-10 w-10 items-center justify-center rounded-full bg-black';
+  const avatarImageFallback = compact
+    ? '/placeholder.svg?height=32&width=32'
+    : '/placeholder.svg?height=40&width=40';
 
   return (
     <div className={`relative user-menu-container ${inMobileMenu ? 'w-full' : ''}`} ref={menuRef}>
@@ -258,19 +272,19 @@ const UserMenu: React.FC<UserMenuProps> = ({ isCollapsed = false, inMobileMenu =
         <button
           ref={buttonRef}
           onClick={toggleAccountMenu}
-          className={`flex min-h-11 w-full items-center space-x-2 rounded-full border border-[var(--clay-border)] bg-white px-3 py-2 transition-colors hover:bg-[var(--clay-surface-soft)] ${mobileMenuClasses}`}
+          className={buttonClasses}
           aria-expanded={isAccountMenuOpen}
           aria-haspopup="true"
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-black">
+          <div className={avatarClasses}>
             {user?.anhDaiDien ? (
               <img
-                src={user.anhDaiDien || '/placeholder.svg?height=40&width=40'}
+                src={user.anhDaiDien || avatarImageFallback}
                 alt={displayName}
                 className="h-full w-full rounded-full object-cover"
               />
             ) : (
-              <User className="h-5 w-5 text-white" />
+              <User className={`${compact ? 'h-4 w-4' : 'h-5 w-5'} text-white`} />
             )}
           </div>
           <div className="min-w-0 flex-1 text-left">

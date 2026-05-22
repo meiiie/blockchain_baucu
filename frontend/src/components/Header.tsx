@@ -77,7 +77,7 @@ export default function Header() {
           )}
 
           {user ? (
-            <UserMenu />
+            <UserMenu compact />
           ) : (
             <NavLink
               to="/login"
